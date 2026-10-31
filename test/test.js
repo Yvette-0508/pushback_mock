@@ -324,3 +324,69 @@ test('cartesia relay: browser start → session_create with persona vars; events
     server.close(); mock.close();
   }
 });
+
+// ---- custom roles from ROLES_FILE (JD you write, e.g. exported from Linear) ----
+const fs = require('fs');
+const os = require('os'); const path = require('path');
+const tmpFile = path.join(os.tmpdir(), `pushback-roles-${Date.now()}.json`);
+fs.writeFileSync(tmpFile, JSON.stringify({
+  pm_pitch: {
+    label: 'Product Manager', personaName: 'Riley Torres', title: 'Senior PM',
+    behavior: ['Interrupt long walkthroughs', 'Challenge scope', 'Ask how you measure success'],
+    rubric: [
+      { key: 'user_first', label: 'User-first', desc: 'd1' }, { key: 'metric_focus', label: 'Metric focus', desc: 'd2' },
+      { key: 'urgency', label: 'Urgency', desc: 'd3' },
+    ],
+    openers: ['I am only free for ten minutes. Pitch me.'],
+    demoQuestions: ['Who is this NOT for?', 'What would the two-week metric be?', 'What are we cutting?'],
+  },
+}));
+
+test('custom roles: loaded, returned by getRole, exposed to publicRoles, instructions include persona', () => {
+  delete require.cache[path.resolve(__dirname, '../lib/roles.js')];
+  const env = process.env.ROLES_FILE; process.env.ROLES_FILE = tmpFile;
+  const roles = require('../lib/roles');
+  assert.ok(roles.getRole('pm_pitch'), 'custom role loaded');
+  assert.equal(roles.ROLES.pm_pitch.personaName, 'Riley Torres');
+  assert.ok(roles.publicRoles().some((r) => r.id === 'pm_pitch'), 'custom role shows in UI list');
+  assert.ok(roles.ROLES.interviewer, 'built-in role still there');
+  const ins = roles.buildInstructions({ role: 'pm_pitch', mode: 'formal', pressure: 'high', context: 'launch date June 1' });
+  assert.match(ins, /Riley Torres/);
+  assert.match(ins, /June 1/);
+  process.env.ROLES_FILE = env || '';
+});
+
+test('custom roles: malformed entries are skipped with a warning, not a crash', () => {
+  const badFile = path.join(os.tmpdir(), `pushback-roles-bad-${Date.now()}.json`);
+  fs.writeFileSync(badFile, JSON.stringify({
+    bad1: { label: 'X' }, // missing name/title
+    bad2: { label: 'X', personaName: 'Y', title: 'Z', rubric: [{ key: 'a', label: 'a', desc: 'd' }] }, // not 3 rubrics
+    ok_role: {
+      label: 'OK', personaName: 'Paul Reed', title: 'Mgr', behavior: ['a','b','c'],
+      rubric: [{ key: 'x', label: 'x', desc: 'd' }, { key: 'y', label: 'y', desc: 'd' }, { key: 'z', label: 'z', desc: 'd' }],
+      openers: ['Hi.'], demoQuestions: ['Q1','Q2','Q3'],
+    },
+  }));
+  delete require.cache[path.resolve(__dirname, '../lib/roles.js')];
+  const env = process.env.ROLES_FILE; process.env.ROLES_FILE = badFile;
+  const roles = require('../lib/roles');
+  assert.deepEqual(Object.keys(roles.ROLES).sort(), ['ok_role', 'boss','coworker','interviewer','investor'].sort(), 'only well-formed role loads');
+  assert.ok(roles.getRole('bad1') === null, 'malformed role rejected');
+  process.env.ROLES_FILE = env || '';
+});
+
+test('custom roles: JD pasted in context shows up in persona prompt + eval prompt', () => {
+  delete require.cache[path.resolve(__dirname, '../lib/roles.js')];
+  const env = process.env.ROLES_FILE; process.env.ROLES_FILE = tmpFile;
+  const roles = require('../lib/roles');
+  const jd = '- Senior PM role at Acme: ship weekly, lead a squad of 4, own onboarding funnel';
+  const ins = roles.buildInstructions({ role: 'pm_pitch', mode: 'formal', pressure: 'medium', context: jd });
+  assert.match(ins, /Acme/);
+  assert.match(ins, /onboarding funnel/);
+  // Eval prompt embeds the user-supplied context too.
+  const { buildEvalPrompt, getRole } = require('../lib/roles');
+  const roleObj = getRole('pm_pitch');
+  const p = require('../lib/evaluator').buildEvalPrompt({ role: roleObj, mode: 'formal', context: jd, transcript: [] });
+  assert.match(p, /onboarding funnel/);
+  process.env.ROLES_FILE = env || '';
+});
