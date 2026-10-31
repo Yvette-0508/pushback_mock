@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MeetSim — Structured Expression Simulator</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- ============ SETUP ============ -->
+  <section id="setup" class="screen active">
+    <div class="setup-wrap">
+      <header class="brand">
+        <div class="logo">M</div>
+        <div>
+          <h1>MeetSim</h1>
+          <p class="muted">Practice structured expression under real meeting pressure.</p>
+        </div>
+      </header>
+
+      <div id="banner" class="banner hidden"></div>
+
+      <div class="step">
+        <h2><span class="num">1</span> Choose mode</h2>
+        <div id="modeCards" class="cards cards-2"></div>
+      </div>
+
+      <div class="step">
+        <h2><span class="num">2</span> Select role</h2>
+        <div id="roleCards" class="cards cards-4"></div>
+      </div>
+
+      <div class="step">
+        <h2><span class="num">3</span> Inject context <span class="muted small">(optional)</span></h2>
+        <label id="contextLabel" for="context" class="muted small"></label>
+        <textarea id="context" rows="6" maxlength="6000"></textarea>
+        <div class="row between">
+          <div class="pressure">
+            <span class="muted small">Pressure:</span>
+            <div id="pressureSeg" class="seg"></div>
+          </div>
+          <div class="pressure">
+            <span class="muted small">Layout:</span>
+            <div id="layoutSeg" class="seg"><button data-layout="zoom" class="on">Zoom</button><button data-layout="meet">Meet</button></div>
+          </div>
+          <span id="ctxCount" class="muted small">0 / 6000</span>
+        </div>
+      </div>
+
+      <div class="row end">
+        <button id="joinBtn" class="btn primary big">Join meeting</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ROOM ============ -->
+  <section id="room" class="screen">
+    <div class="room-top">
+      <div class="row gap">
+        <span class="rec-dot"></span>
+        <span id="roomTitle"></span>
+        <span id="modeBadge" class="badge"></span>
+        <span id="engineBadge" class="badge ghost"></span>
+      </div>
+      <div class="row gap">
+        <span id="latency" class="muted small"></span>
+        <span id="timer" class="mono">00:00</span>
+      </div>
+    </div>
+
+    <div class="room-body">
+      <div class="stage">
+        <div class="tiles">
+          <div id="aiTile" class="tile">
+            <div class="avatar" id="aiAvatar"></div>
+            <div class="tile-label"><span id="aiName"></span> <span id="aiTitle" class="muted small"></span></div>
+            <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div id="userTile" class="tile">
+            <div class="avatar user">You</div>
+            <div class="tile-label">You <span id="micState" class="muted small"></span></div>
+            <div class="eq"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+        </div>
+        <div id="caption" class="caption"></div>
+        <form id="typeForm" class="type-form hidden">
+          <input id="typeInput" placeholder="No mic? Type your answer and press Enter…" autocomplete="off" />
+          <button class="btn">Send</button>
+        </form>
+      </div>
+
+      <aside id="sidebar" class="sidebar">
+        <div class="tabs">
+          <button data-tab="chat" class="tab active">Transcript</button>
+          <button data-tab="coach" class="tab practice-only">Coach</button>
+        </div>
+        <div id="tab-chat" class="tab-panel active"><div id="transcript" class="transcript"></div></div>
+        <div id="tab-coach" class="tab-panel">
+          <div class="coach-section">
+            <h3>Live hints</h3>
+            <div id="hints" class="hints"><p class="muted small">Hints appear after each answer.</p></div>
+          </div>
+          <div class="coach-section">
+            <h3>Structure of your last answer</h3>
+            <div id="liveTree" class="tree"><p class="muted small">—</p></div>
+          </div>
+          <div class="coach-section">
+            <h3>Better phrasing</h3>
+            <div id="better" class="better"><p class="muted small">Click “Better phrasing” in the toolbar.</p></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="toolbar">
+      <button id="muteBtn" class="tool"><span class="ico">🎙</span><span>Mute</span></button>
+      <button id="pauseBtn" class="tool practice-only"><span class="ico">⏸</span><span>Pause</span></button>
+      <button id="betterBtn" class="tool practice-only"><span class="ico">✨</span><span>Better phrasing</span></button>
+      <button id="chatBtn" class="tool"><span class="ico">💬</span><span>Panel</span></button>
+      <button id="leaveBtn" class="tool leave"><span class="ico">⏹</span><span>End &amp; get report</span></button>
+    </div>
+    <div id="pausedOverlay" class="overlay hidden"><div><h2>Paused</h2><p class="muted">The interviewer is waiting. Take a breath and structure your answer.</p><button id="resumeBtn" class="btn primary">Resume</button></div></div>
+  </section>
+
+  <!-- ============ REPORT ============ -->
+  <section id="report" class="screen">
+    <div class="report-wrap">
+      <div class="row between">
+        <h1>Session report</h1>
+        <div class="row gap">
+          <button id="downloadBtn" class="btn">Download JSON</button>
+          <button id="againBtn" class="btn primary">New session</button>
+        </div>
+      </div>
+      <div id="reportBody"><div class="loading"><div class="spinner"></div><p>Analyzing your session…</p></div></div>
+    </div>
+  </section>
+
+  <audio id="aiAudio" autoplay></audio>
+  <script src="/lib/analyzer.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
