@@ -68,6 +68,19 @@ Linear is **not connected to runtime content**. The Cartesia agent, the roles an
 
 If you want runtime connection, you'd have to add it: a small Intake endpoint that fetches a Linear doc/issue and writes it into `text` on `context`, or a `ROLES_FILE` exporter. Happy to add it — tell me which.
 
+## Projects (saved setups)
+
+The **Project** row at the top of the Playground saves named setups — role + mode + pressure + context (your JD) — so each project maps to one role+JD combo. "Save current" stores the current form; clicking a chip loads it; × deletes it.
+
+Storage backends:
+
+- **Default:** a local JSON file (`.pushback-projects.json`, gitignored). Fine for one machine.
+- **PostgreSQL:** set `DATABASE_URL` and projects live in the database — survives redeploys and is shared across devices. On DigitalOcean: create a Managed PostgreSQL cluster (the $15/mo 1 vCPU / 1 GB tier is more than enough — this table stores a few KB per project), copy the connection string from the control panel into `.env`, restart. The table (`pushback_projects`) is created automatically on startup.
+
+```bash
+DATABASE_URL=postgresql://doadmin:PASSWORD@your-cluster.db.ondigitalocean.com:25060/defaultdb?sslmode=require
+```
+
 ## Environment variables
 
 Everything is optional; without keys it runs in demo mode (browser speech + scripted persona + heuristic report).
@@ -81,6 +94,8 @@ Everything is optional; without keys it runs in demo mode (browser speech + scri
 | `CARTESIA_AGENT_ID_INTERVIEWER` | auto-create | Use an agent you configured in the Cartesia Playground. |
 | `VOICE_PROVIDER` | auto (`cartesia` when key set) | `demo` forces the browser-speech persona. |
 | `ROLES_FILE` | — | JSON file with extra roles (see above). |
+| `DATABASE_URL` | — | PostgreSQL connection string for the projects store (default: local JSON file). |
+| `DATABASE_TABLE` | `pushback_projects` | Table name for projects. |
 | `LLM_API_KEY` | — | Key for reports/"better phrasing". Any OpenAI-compatible provider. |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | Base URL of `/chat/completions`. |
 | `LLM_MODEL` | `gpt-4.1` | Model for reports/`better phrasing`. |

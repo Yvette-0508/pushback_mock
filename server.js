@@ -11,6 +11,7 @@ const { WebSocketServer } = require('ws');
 const { MODES, PRESSURE, validateConfig, buildInstructions, getRole, publicRoles } = require('./lib/roles');
 const { evaluateSession, rephrase } = require('./lib/evaluator');
 const { createCartesia } = require('./lib/cartesia');
+const { createStore, sanitizeProject } = require('./lib/projects');
 
 // cartesia | demo. VOICE_PROVIDER=demo forces the browser-speech demo voice.
 function pickVoiceProvider(env) {
@@ -34,6 +35,7 @@ function createApp(opts = {}) {
   const fetchImpl = opts.fetch || fetch;
   const voiceProvider = pickVoiceProvider(env);
   const cartesiaModel = env.CARTESIA_AGENT_MODEL || 'gpt-5.4-mini';
+  const projects = createStore({ env });
   const cartesia = env.CARTESIA_API_KEY
     ? createCartesia({
       apiKey: env.CARTESIA_API_KEY, model: cartesiaModel, env, fetchImpl,
@@ -45,8 +47,29 @@ function createApp(opts = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
+  app.locals.projects = projects;
+  projects.init().catch((e) => console.error('projects init failed:', e.message));
   app.use(express.static(path.join(__dirname, 'public')));
   app.get('/lib/analyzer.js', (req, res) => res.sendFile(path.join(__dirname, 'lib', 'analyzer.js')));
+
+  // Projects (a named saved setup: role+mode+pressure+context).
+  app.get('/api/projects', async (req, res) => {
+    try { res.json(await app.locals.projects.list()); } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.post('/api/projects', async (req, res) => {
+    const { ROLES } = require('./lib/roles');
+    const ok = sanitizeProject(req.body, Object.keys(ROLES));
+    if (ok.error) return res.status(400).json({ error: ok.error });
+    const now = new Date().toISOString();
+    const project = { id: 'p_' + Math.random().toString(36).slice(2, 10), ...ok.project, createdAt: now, updatedAt: now };
+    try { await app.locals.projects.upsert(project); res.json(project); } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.delete('/api/projects/:id', async (req, res) => {
+    try {
+      const deleted = await app.locals.projects.remove(String(req.params.id).slice(0, 40));
+      res.json({ ok: true, deleted });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 
   app.get('/api/config', (req, res) => {
     res.json({
@@ -57,6 +80,7 @@ function createApp(opts = {}) {
       llmEvaluation: !!llm.apiKey,
       llmModel: llm.apiKey ? llm.model : null,
       cartesiaModel: cartesia ? cartesiaModel : null,
+      projectsBackend: projects.kind,
     });
   });
 
@@ -83,6 +107,7 @@ function createApp(opts = {}) {
 
   app.locals.cartesia = cartesia;
   app.locals.voiceProvider = voiceProvider;
+  app.locals.projectsStore = { kind: projects.kind };
   return app;
 }
 
@@ -175,6 +200,7 @@ if (require.main === module) {
       : 'Voice: demo mode (browser speech + scripted persona) — set CARTESIA_API_KEY for Cartesia.');
     const llm = llmConfig({ ...process.env });
     console.log(llm.apiKey ? `Reports: ${llm.model} via ${llm.baseUrl}` : 'Reports: heuristic analyzer (no LLM_API_KEY set).');
+    console.log(`Projects store: ${app.locals.projects.kind}${app.locals.projects.kind === 'json' ? ' (.pushback-projects.json; set DATABASE_URL for Postgres)' : ''}`);
   });
 }
 

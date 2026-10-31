@@ -68,6 +68,15 @@ body.nav-collapsed .nav-item { justify-content: center; }
 .sec-head { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 16px; color: var(--text2); font-size: 15px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1; }
 .sec-note { margin: 0; padding: 12px 16px 16px; font-size: 13px; color: var(--muted); font-style: italic; }
 
+/* Saved projects row */
+.projects-row { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 16px 12px; }
+.projects-row .proj-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--soft); border: 1px solid var(--line2); padding: 4px 10px; font-size: 13px; color: var(--text2); }
+.projects-row .proj-chip:hover { background: var(--soft2); }
+.projects-row .proj-chip.on { background: var(--pink); border-color: var(--pink2); color: var(--pinkText); }
+.projects-row .proj-chip .del { background: none; border: 0; padding: 0 0 0 2px; color: var(--faint); font-size: 16px; line-height: 1; cursor: pointer; vertical-align: middle; }
+.projects-row .proj-chip .del:hover { color: var(--bad); }
+.projects-row .proj-chip .m { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
 /* Type-tag cards (the noul / score / choice / box look) */
 .tcards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 14px 16px 16px; }
 .tcard { text-align: left; background: var(--soft); border: 1px solid transparent; padding: 16px 18px 18px; color: var(--text); transition: background .12s, border-color .12s; }

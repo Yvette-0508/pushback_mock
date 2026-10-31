@@ -390,3 +390,61 @@ test('custom roles: JD pasted in context shows up in persona prompt + eval promp
   assert.match(p, /onboarding funnel/);
   process.env.ROLES_FILE = env || '';
 });
+
+// ---- projects API (JSON store; Postgres is the same interface with a pg pool) ----
+const { createStore, sanitizeProject } = require('../lib/projects');
+
+test('projects: sanitize validates name/role and defaults mode/pressure', () => {
+  assert.ok(sanitizeProject({}, ['interviewer']).error, 'name required');
+  assert.ok(sanitizeProject({ name: 'X', role: 'nope' }, ['interviewer']).error, 'bad role rejected');
+  const ok = sanitizeProject({ name: ' My JD ', role: 'interviewer', mode: 'weird', pressure: 'extreme', context: 'c\u0000x' }, ['interviewer']);
+  assert.equal(ok.project.name, 'My JD');
+  assert.equal(ok.project.mode, 'practice');
+  assert.equal(ok.project.pressure, 'medium');
+  assert.equal(ok.project.context, 'cx', 'null bytes stripped');
+});
+
+test('projects: JSON store roundtrip + API endpoints', async () => {
+  const file = path.join(os.tmpdir(), `pushback-projects-${Date.now()}.json`);
+  const store = createStore({ env: {}, file });
+  await store.init();
+  assert.equal(store.kind, 'json');
+  await store.upsert({ id: 'p1', name: 'A', role: 'boss', mode: 'formal', pressure: 'high', context: 'ctx' });
+  assert.equal((await store.list()).length, 1);
+  assert.equal((await store.get('p1')).name, 'A');
+  await store.upsert({ id: 'p1', name: 'B', role: 'boss', mode: 'formal', pressure: 'high', context: 'ctx' });
+  assert.equal((await store.get('p1')).name, 'B', 'upsert replaces');
+  assert.equal(await store.remove('p1'), true);
+  assert.equal(await store.remove('p1'), false);
+
+  const app = createApp({ env: { OPENAI_API_KEY: '', LLM_API_KEY: '', CARTESIA_API_KEY: '' } });
+  app.locals.projects = createStore({ env: {}, file: path.join(os.tmpdir(), `pushback-projects-api-${Date.now()}.json`) });
+  const srv = await new Promise((res) => { const x = app.listen(0, () => res(x)); });
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    const created = await (await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Acme PM', role: 'interviewer', mode: 'formal', pressure: 'high', context: 'JD here' }) })).json();
+    assert.ok(created.id && created.createdAt);
+    const list = await (await fetch(`${base}/api/projects`)).json();
+    assert.equal(list.length, 1);
+    assert.equal(list[0].name, 'Acme PM');
+    const bad = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'X', role: 'nope' }) });
+    assert.equal(bad.status, 400);
+    const del = await (await fetch(`${base}/api/projects/${created.id}`, { method: 'DELETE' })).json();
+    assert.equal(del.deleted, true);
+    assert.equal((await (await fetch(`${base}/api/projects`)).json()).length, 0);
+  } finally { srv.close(); }
+});
+
+test('projects: postgres store issues the right SQL (mock pool)', async () => {
+  const queries = [];
+  const pool = { query: async (sql, params) => { queries.push({ sql: sql.replace(/\s+/g, ' ').trim(), params }); return { rows: [], rowCount: 1 }; } };
+  const store = createStore({ env: { DATABASE_URL: 'postgresql://ignored' }, pool });
+  assert.equal(store.kind, 'postgres');
+  await store.init();
+  assert.match(queries[0].sql, /CREATE TABLE IF NOT EXISTS pushback_projects/);
+  await store.upsert({ id: 'p1', name: 'A', role: 'boss', mode: 'formal', pressure: 'high', context: 'c' });
+  assert.match(queries[1].sql, /ON CONFLICT \(id\) DO UPDATE/);
+  assert.deepEqual(queries[1].params, ['p1', 'A', 'boss', 'formal', 'high', 'c']);
+  await store.remove('p1');
+  assert.match(queries[2].sql, /DELETE FROM pushback_projects/);
+});

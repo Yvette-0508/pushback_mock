@@ -9,8 +9,12 @@
   const A = window.PushBackAnalyzer;
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  const PROJECTS_KEY = 'pushback.projects';
+  const loadLocalProjects = () => { try { return JSON.parse(localStorage.getItem(PROJECTS_KEY)) || []; } catch { return []; } };
+  const saveLocalProjects = (list) => { try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(list)); } catch {} };
   const state = {
     cfg: null, mode: 'practice', role: 'interviewer', pressure: 'medium', layout: localStorage.getItem('pushback.layout') || 'zoom',
+    projects: [], activeProject: null,
     transcript: [], engine: null, startedAt: 0, timerId: null, muted: false, paused: false, report: null, latencies: [],
   };
 
@@ -28,6 +32,7 @@
     $('#engineStat').textContent = vp === 'cartesia' ? 'Cartesia' : 'Demo voice';
     $('#modelPill').textContent = vp === 'cartesia' ? `cartesia · ${state.cfg.cartesiaModel}` : 'demo-voice';
     renderModes(); renderRoles(); renderPressure(); applyLayout();
+    refreshProjects();
     const ctx = $('#context');
     ctx.addEventListener('input', updateEditor);
     ctx.addEventListener('scroll', () => { $('#gutter').scrollTop = ctx.scrollTop; });
@@ -35,6 +40,7 @@
     $$('#layoutSeg button').forEach((b) => b.addEventListener('click', () => { state.layout = b.dataset.layout; localStorage.setItem('pushback.layout', state.layout); applyLayout(); }));
     $('#joinBtn').addEventListener('click', joinMeeting);
     $('#againBtn').addEventListener('click', () => { state.report = null; $('[data-go="report"]').disabled = true; show('setup'); });
+    $('#saveProjectBtn').addEventListener('click', saveCurrentProject);
     $('#downloadBtn').addEventListener('click', downloadReport);
     $('#clearBtn').addEventListener('click', () => {
       state.mode = 'practice'; state.role = 'interviewer'; state.pressure = 'medium';
@@ -50,6 +56,7 @@
   }
   function showBanner(t) { $('#banner').textContent = t; $('#announce').classList.remove('hidden'); document.body.classList.add('has-strip'); }
   function updateEditor() {
+    if (state.activeProject) { state.activeProject = null; renderProjects(); }
     const v = $('#context').value;
     $('#ctxCount').textContent = `${v.length} / 6000`;
     $('#gutter').textContent = Array.from({ length: Math.max(1, v.split('\n').length) }, (_, i) => i + 1).join('\n');
@@ -59,6 +66,7 @@
     $$('#layoutSeg button').forEach((b) => b.classList.toggle('on', b.dataset.layout === state.layout));
   }
   function renderModes() {
+    if (state.activeProject) { state.activeProject = null; renderProjects(); }
     const ex = { practice: 'Pause anytime, see your answer as a structure tree.', formal: 'Like the real thing — one shot, scored at the end.' };
     $('#modeCards').innerHTML = state.cfg.modes.map((m) => `
       <button class="tcard ${m.id === state.mode ? 'selected' : ''}" data-mode="${m.id}">
@@ -70,6 +78,7 @@
     $$('#modeCards .tcard').forEach((c) => c.addEventListener('click', () => { state.mode = c.dataset.mode; renderModes(); renderPreview(); }));
   }
   function renderRoles() {
+    if (state.activeProject) { state.activeProject = null; renderProjects(); }
     $('#roleCards').innerHTML = state.cfg.roles.map((r) => `
       <button class="tcard ${r.id === state.role ? 'selected' : ''}" data-role="${r.id}">
         <span class="ttag">${esc(r.id)}</span>
@@ -83,11 +92,76 @@
     renderPreview();
   }
   function renderPressure() {
+    if (state.activeProject) { state.activeProject = null; renderProjects(); }
     $('#pressureSeg').innerHTML = state.cfg.pressure.map((p) => `<button data-p="${p.id}" class="${p.id === state.pressure ? 'on' : ''}" title="${esc(p.desc)}">${esc(p.label)}</button>`).join('');
     $$('#pressureSeg button').forEach((b) => b.addEventListener('click', () => { state.pressure = b.dataset.p; renderPressure(); }));
     const p = state.cfg.pressure.find((x) => x.id === state.pressure);
     $('#pressureDesc').textContent = p ? `${p.desc}${p.interruptAfterSec ? ` Cuts in after ~${p.interruptAfterSec}s of talking.` : ''}` : '';
     renderPreview();
+  }
+
+  function applyProject(p) {
+    state.activeProject = p.id;
+    state.mode = p.mode; state.role = p.role; state.pressure = p.pressure;
+    $('#context').value = p.context || ''; updateEditor();
+    renderModes(); renderRoles(); renderPressure(); renderProjects();
+  }
+  async function refreshProjects() {
+    try {
+      const r = await fetch('/api/projects');
+      state.projects = r.ok ? await r.json() : loadLocalProjects();
+    } catch {
+      state.projects = loadLocalProjects();
+    }
+    saveLocalProjects(state.projects);
+    renderProjects();
+  }
+  async function deleteProject(id) {
+    state.projects = state.projects.filter((p) => String(p.id) !== String(id));
+    if (String(state.activeProject) === String(id)) state.activeProject = null;
+    saveLocalProjects(state.projects);
+    renderProjects();
+    try { await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch {}
+  }
+  async function saveCurrentProject() {
+    const role = currentRole(); if (!role) return;
+    const name = prompt(`Save as project (role ${role.label}, ${state.mode}, ${state.pressure}) name:`, `${role.label} — ${new Date().toISOString().slice(0, 10)}`);
+    if (!name) return;
+    const trimmed = name.trim(); if (!trimmed) return;
+    const payload = { name: trimmed.slice(0, 80), mode: state.mode, role: state.role, pressure: state.pressure, context: $('#context').value };
+    try {
+      const r = await fetch('/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const saved = await r.json();
+      state.projects = [saved, ...state.projects.filter((p) => p.name !== saved.name)];
+      state.activeProject = saved.id;
+    } catch {
+      // Server unreachable — keep it in localStorage on this browser at least.
+      const project = { id: 'p' + Date.now(), ...payload };
+      state.projects = [project, ...state.projects.filter((p) => p.name !== trimmed)];
+      state.activeProject = project.id;
+      showBanner('Could not save the project to the server — keeping a copy in this browser instead.');
+    }
+    saveLocalProjects(state.projects);
+    renderProjects();
+  }
+  function renderProjects() {
+    const row = $('#projectsRow');
+    if (!state.projects.length) {
+      row.innerHTML = '<span class="muted small">No saved projects — pick a role, paste context, hit “Save current”.</span>';
+      return;
+    }
+    row.innerHTML = state.projects.map((p) =>
+      `<span class="proj-chip ${state.activeProject === p.id ? 'on' : ''}" data-id="${p.id}" data-name="${esc(p.name)}"><button class="m" data-open="${p.id}">${esc(p.name)}</button><button class="del" data-del="${p.id}" title="Delete">×</button></span>`,
+    ).join('');
+    row.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => {
+      const p = state.projects.find((x) => String(x.id) === b.dataset.open);
+      if (p) applyProject(p);
+    }));
+    row.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteProject(b.dataset.del);
+    }));
   }
 
   // Right-hand preview panel: who you're about to meet and how you'll be scored.
