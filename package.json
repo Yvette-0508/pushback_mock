@@ -20,6 +20,7 @@
   "homepage": "https://github.com/Yvette-0508/pushback_mock#readme",
   "dependencies": {
     "dotenv": "^18.0.9",
-    "express": "^4.22.3"
+    "express": "^4.22.3",
+    "ws": "^8.22.1"
   }
 }

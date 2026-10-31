@@ -1,16 +1,16 @@
-/* MeetSim front-end: setup → meeting room → report.
- * Two voice engines:
- *  - RealtimeEngine: OpenAI Realtime API over WebRTC (ephemeral key from /api/realtime/session).
+/* PushBack front-end: setup → meeting room → report.
+ * Voice engines:
+ *  - CartesiaEngine: Cartesia Managed Agent (Ink STT + hosted LLM + Sonic TTS) via the /ws/cartesia relay.
  *  - DemoEngine: browser SpeechRecognition + speechSynthesis + scripted persona (no API key needed).
  */
 (() => {
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
-  const A = window.MeetSimAnalyzer;
+  const A = window.PushBackAnalyzer;
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   const state = {
-    cfg: null, mode: 'practice', role: 'interviewer', pressure: 'medium', layout: localStorage.getItem('meetsim.layout') || 'zoom',
+    cfg: null, mode: 'practice', role: 'interviewer', pressure: 'medium', layout: localStorage.getItem('pushback.layout') || 'zoom',
     transcript: [], engine: null, startedAt: 0, timerId: null, muted: false, paused: false, report: null, latencies: [],
   };
 
@@ -19,52 +19,118 @@
     try {
       state.cfg = await (await fetch('/api/config')).json();
     } catch {
-      return showBanner('Could not reach the MeetSim server.');
+      return showBanner('Could not reach the PushBack server.');
     }
-    if (!state.cfg.realtimeAvailable) {
-      showBanner('Demo mode: no OPENAI_API_KEY on the server. Voice uses your browser\'s speech recognition/synthesis with a scripted persona; reports use the local heuristic analyzer. Add a key to .env for the full realtime experience.');
+    const vp = state.cfg.voiceProvider;
+    if (vp !== 'cartesia') {
+      showBanner('Demo mode — no CARTESIA_API_KEY on the server. Voice uses browser speech with a scripted persona. Add a Cartesia key to .env for the real voice.');
     }
+    $('#engineStat').textContent = vp === 'cartesia' ? 'Cartesia' : 'Demo voice';
+    $('#modelPill').textContent = vp === 'cartesia' ? `cartesia · ${state.cfg.cartesiaModel}` : 'demo-voice';
     renderModes(); renderRoles(); renderPressure(); applyLayout();
-    $('#context').addEventListener('input', (e) => { $('#ctxCount').textContent = `${e.target.value.length} / 6000`; });
-    $$('#layoutSeg button').forEach((b) => b.addEventListener('click', () => { state.layout = b.dataset.layout; localStorage.setItem('meetsim.layout', state.layout); applyLayout(); }));
+    const ctx = $('#context');
+    ctx.addEventListener('input', updateEditor);
+    ctx.addEventListener('scroll', () => { $('#gutter').scrollTop = ctx.scrollTop; });
+    updateEditor();
+    $$('#layoutSeg button').forEach((b) => b.addEventListener('click', () => { state.layout = b.dataset.layout; localStorage.setItem('pushback.layout', state.layout); applyLayout(); }));
     $('#joinBtn').addEventListener('click', joinMeeting);
-    $('#againBtn').addEventListener('click', () => { state.report = null; show('setup'); });
+    $('#againBtn').addEventListener('click', () => { state.report = null; $('[data-go="report"]').disabled = true; show('setup'); });
     $('#downloadBtn').addEventListener('click', downloadReport);
+    $('#clearBtn').addEventListener('click', () => {
+      state.mode = 'practice'; state.role = 'interviewer'; state.pressure = 'medium';
+      ctx.value = ''; updateEditor(); renderModes(); renderRoles(); renderPressure();
+    });
+    $('#announceClose').addEventListener('click', () => { $('#announce').classList.add('hidden'); document.body.classList.remove('has-strip'); });
+    $('#navCollapse').addEventListener('click', () => document.body.classList.toggle('nav-collapsed'));
+    $$('.nav-item[data-go]').forEach((n) => n.addEventListener('click', () => {
+      if (n.disabled || $('#room').classList.contains('active')) return; // don't leave a live meeting via nav
+      show(n.dataset.go);
+    }));
     bindRoom();
   }
-  function showBanner(t) { const b = $('#banner'); b.textContent = t; b.classList.remove('hidden'); }
+  function showBanner(t) { $('#banner').textContent = t; $('#announce').classList.remove('hidden'); document.body.classList.add('has-strip'); }
+  function updateEditor() {
+    const v = $('#context').value;
+    $('#ctxCount').textContent = `${v.length} / 6000`;
+    $('#gutter').textContent = Array.from({ length: Math.max(1, v.split('\n').length) }, (_, i) => i + 1).join('\n');
+  }
   function applyLayout() {
     document.body.classList.toggle('meet', state.layout === 'meet');
     $$('#layoutSeg button').forEach((b) => b.classList.toggle('on', b.dataset.layout === state.layout));
   }
   function renderModes() {
+    const ex = { practice: 'Pause anytime, see your answer as a structure tree.', formal: 'Like the real thing — one shot, scored at the end.' };
     $('#modeCards').innerHTML = state.cfg.modes.map((m) => `
-      <button class="card ${m.id === state.mode ? 'selected' : ''}" data-mode="${m.id}">
-        <h3>${m.id === 'practice' ? '🧭' : '🎯'} ${esc(m.label)} Mode</h3><p>${esc(m.desc)}</p>
+      <button class="tcard ${m.id === state.mode ? 'selected' : ''}" data-mode="${m.id}">
+        <span class="ttag">${esc(m.id)}</span>
+        <div class="ttl">${esc(m.label)} mode</div>
+        <div class="tdesc">${esc(m.desc)}</div>
+        <div class="tex">${esc(ex[m.id] || '')}</div>
       </button>`).join('');
-    $$('#modeCards .card').forEach((c) => c.addEventListener('click', () => { state.mode = c.dataset.mode; renderModes(); }));
+    $$('#modeCards .tcard').forEach((c) => c.addEventListener('click', () => { state.mode = c.dataset.mode; renderModes(); renderPreview(); }));
   }
   function renderRoles() {
     $('#roleCards').innerHTML = state.cfg.roles.map((r) => `
-      <button class="card ${r.id === state.role ? 'selected' : ''}" data-role="${r.id}">
-        <h3>${esc(r.label)}</h3>
-        <p>${esc(r.behavior[0])}</p>
-        <div class="persona">${esc(r.personaName)} · ${esc(r.title)}</div>
-        <div class="chips">${r.rubric.map((x) => `<span class="chip">${esc(x.label)}</span>`).join('')}</div>
+      <button class="tcard ${r.id === state.role ? 'selected' : ''}" data-role="${r.id}">
+        <span class="ttag">${esc(r.id)}</span>
+        <div class="ttl">${esc(r.behavior[0])}</div>
+        <div class="tex">${esc(r.personaName)}, ${esc(r.title)}</div>
       </button>`).join('');
-    $$('#roleCards .card').forEach((c) => c.addEventListener('click', () => { state.role = c.dataset.role; renderRoles(); }));
+    $$('#roleCards .tcard').forEach((c) => c.addEventListener('click', () => { state.role = c.dataset.role; renderRoles(); }));
     const role = currentRole();
-    $('#contextLabel').textContent = role.contextLabel;
+    $('#contextLabel').innerHTML = `Paste the <b>${esc(role.contextLabel.toLowerCase())}</b> — the persona uses it as data to make questions specific.`;
     $('#context').placeholder = role.contextPlaceholder;
+    renderPreview();
   }
   function renderPressure() {
     $('#pressureSeg').innerHTML = state.cfg.pressure.map((p) => `<button data-p="${p.id}" class="${p.id === state.pressure ? 'on' : ''}" title="${esc(p.desc)}">${esc(p.label)}</button>`).join('');
     $$('#pressureSeg button').forEach((b) => b.addEventListener('click', () => { state.pressure = b.dataset.p; renderPressure(); }));
+    const p = state.cfg.pressure.find((x) => x.id === state.pressure);
+    $('#pressureDesc').textContent = p ? `${p.desc}${p.interruptAfterSec ? ` Cuts in after ~${p.interruptAfterSec}s of talking.` : ''}` : '';
+    renderPreview();
+  }
+
+  // Right-hand preview panel: who you're about to meet and how you'll be scored.
+  const CAP_ICONS = [
+    '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2"><rect x="10" y="8" width="44" height="48" rx="4"/><path d="M20 22h24M20 32h24M20 42h14"/></svg>',
+    '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 18V8h10M46 8h10v10M56 46v10H46M18 56H8V46"/><path d="m32 20 11 6v12l-11 6-11-6V26z"/><path d="m21 26 11 6 11-6M32 32v12"/></svg>',
+    '<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2"><circle cx="32" cy="32" r="22"/><circle cx="32" cy="32" r="13"/><circle cx="32" cy="32" r="4"/></svg>',
+  ];
+  function renderPreview() {
+    const role = currentRole(); if (!role) return;
+    const p = state.cfg.pressure.find((x) => x.id === state.pressure);
+    const mode = state.cfg.modes.find((m) => m.id === state.mode);
+    $('#preview').innerHTML = `<div class="preview-inner">
+      <div class="eyebrow">${esc(role.label)} · ${esc(mode?.label || '')} mode · ${esc(p?.label || '')} pressure</div>
+      <h1 class="display">${esc(role.personaName)}</h1>
+      <div class="display-sub">${esc(role.title)}</div>
+      <div class="pink-card">
+        <b>How ${esc(role.personaName.split(' ')[0])} will push back</b>
+        ${role.behavior.map((b) => `<p>${esc(b)}</p>`).join('')}
+        <a id="focusCtx">Add context for sharper questions</a>
+      </div>
+      <div class="cap-title">What you're scored on</div>
+      <div class="cap-grid">${role.rubric.map((r, i) => `
+        <div class="cap"><span class="cap-label">${esc(r.key.replace(/_/g, ' '))}</span>${CAP_ICONS[i % CAP_ICONS.length]}
+          <div class="cap-name">${esc(r.label)}</div><div class="cap-desc">${esc(r.desc)}</div></div>`).join('')}
+      </div>
+      <div class="cap-title">Questions to expect</div>
+      <div class="ex-list">
+        <div class="ex"><b>Opener</b><span>${esc(role.openers[0])}</span></div>
+        ${role.demoQuestions.slice(0, 3).map((q, i) => `<div class="ex"><b>Follow-up ${i + 1}</b><span>${esc(q)}</span></div>`).join('')}
+      </div></div>`;
+    $('#focusCtx').addEventListener('click', () => $('#context').focus());
   }
   const currentRole = () => state.cfg.roles.find((r) => r.id === state.role);
   const sessionConfig = () => ({ role: state.role, mode: state.mode, pressure: state.pressure, context: $('#context').value });
   const interruptAfterSec = () => (state.cfg.pressure.find((p) => p.id === state.pressure) || {}).interruptAfterSec || 0;
-  function show(id) { $$('.screen').forEach((s) => s.classList.toggle('active', s.id === id)); }
+  function show(id) {
+    $$('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
+    $$('.nav-item[data-go]').forEach((n) => n.classList.toggle('active', n.dataset.go === id));
+    $('[data-go="room"]').disabled = id !== 'room';
+    if (id === 'report' || state.report) $('[data-go="report"]').disabled = false;
+    $('#sessionStat').textContent = id === 'room' ? `Live · ${currentRole().personaName}` : state.report ? `Last score ${state.report.overall}` : 'Not started';
+  }
 
   // ---------------- Room ----------------
   function bindRoom() {
@@ -121,22 +187,27 @@
 
     const joinBtn = $('#joinBtn'); joinBtn.disabled = true;
     try {
-      if (state.cfg.realtimeAvailable) {
-        state.engine = new RealtimeEngine(sessionConfig(), role, handlers, interruptAfterSec());
-        $('#engineBadge').textContent = `Realtime · ${state.cfg.realtimeModel}`;
+      if (state.cfg.voiceProvider === 'cartesia') {
+        state.engine = new CartesiaEngine(sessionConfig(), role, handlers, interruptAfterSec());
+        $('#engineBadge').textContent = `Cartesia · ${state.cfg.cartesiaModel}`;
       } else {
         state.engine = new DemoEngine(sessionConfig(), role, handlers, interruptAfterSec());
         $('#engineBadge').textContent = 'Demo voice';
       }
-      $('#typeForm').classList.remove('hidden');
+      // The Cartesia agent is voice-only (no text input event).
+      $('#typeForm').classList.toggle('hidden', state.engine instanceof CartesiaEngine);
       await state.engine.start();
     } catch (err) {
-      handlers.onError(`Could not start voice: ${err.message}. You can type your answers below.`);
+      // Keep the reason visible: the fallback persona's opener overwrites the caption.
+      showBanner(`Cartesia voice unavailable — ${err.message} Using browser speech + scripted persona instead.`);
       if (state.engine && !(state.engine instanceof DemoEngine)) {
         try { state.engine.stop(); } catch {}
-        state.engine = new DemoEngine(sessionConfig(), role, handlers, interruptAfterSec(), { noMic: true });
-        $('#engineBadge').textContent = 'Text fallback';
+        state.engine = new DemoEngine(sessionConfig(), role, handlers, interruptAfterSec());
+        $('#engineBadge').textContent = 'Demo voice (fallback)';
+        $('#typeForm').classList.remove('hidden');
         await state.engine.start();
+      } else {
+        handlers.onError(`Could not start voice: ${err.message} You can type your answers below.`);
       }
     } finally { joinBtn.disabled = false; }
 
@@ -219,6 +290,7 @@
       if (!res.ok) throw new Error(report.error || res.statusText);
       state.report = { ...report, transcript, config: sessionConfig(), durationSec: Math.round((Date.now() - state.startedAt) / 1000), latencies: state.latencies };
       renderReport(state.report);
+      $('#sessionStat').textContent = `Last score ${state.report.overall}`;
     } catch (e) {
       $('#reportBody').innerHTML = `<div class="r-card">Report failed: ${esc(e.message)}</div>`;
     }
@@ -275,117 +347,165 @@
     if (!state.report) return;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(state.report, null, 2)], { type: 'application/json' }));
-    a.download = `meetsim-report-${new Date().toISOString().slice(0, 19)}.json`;
+    a.download = `pushback-report-${new Date().toISOString().slice(0, 19)}.json`;
     a.click();
   }
 
-  // ---------------- Realtime engine (OpenAI WebRTC) ----------------
-  class RealtimeEngine {
-    constructor(config, role, h, interruptSec) { Object.assign(this, { config, role, h, interruptSec }); this.aiItems = {}; }
+  // ---------------- Cartesia engine (Managed Agent via /ws/cartesia relay) ----------------
+  // Mic → AudioWorklet (resample to 24 kHz, 16-bit PCM, 40 ms frames) → base64 audio_input.
+  // audio_output (same format) is scheduled gaplessly through an AudioContext; audio_output_clear
+  // (user barge-in) flushes it. Playback is routed through a MediaStream into <audio> so the
+  // browser's echo canceller sees it.
+  const CARTESIA_RATE = 24000;
+  const CAPTURE_WORKLET = `
+    class PcmCapture extends AudioWorkletProcessor {
+      constructor() { super(); this.ratio = sampleRate / ${CARTESIA_RATE}; this.pos = 0; this.n = 0; this.out = new Int16Array(960); }
+      process(inputs) {
+        const ch = inputs[0] && inputs[0][0];
+        if (!ch) return true;
+        while (this.pos < ch.length) {
+          const i = Math.floor(this.pos), f = this.pos - i, a = ch[i], b = i + 1 < ch.length ? ch[i + 1] : a;
+          const v = Math.max(-1, Math.min(1, a + (b - a) * f));
+          this.out[this.n++] = v < 0 ? v * 0x8000 : v * 0x7fff;
+          if (this.n === this.out.length) { this.port.postMessage(this.out.buffer, [this.out.buffer]); this.out = new Int16Array(960); this.n = 0; }
+          this.pos += this.ratio;
+        }
+        this.pos -= ch.length;
+        return true;
+      }
+    }
+    registerProcessor('pcm-capture', PcmCapture);`;
+  const b64FromBytes = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+  const bytesFromB64 = (b64) => { const s = atob(b64); const u8 = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i); return u8; };
+
+  class CartesiaEngine {
+    constructor(config, role, h, interruptSec) {
+      Object.assign(this, { config, role, h, interruptSec });
+      this.sources = new Set(); this.playhead = 0; this.aiText = {}; this.ready = false; this.stopped = false;
+    }
     async start() {
-      const tok = await fetch('/api/realtime/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.config) });
-      const data = await tok.json();
-      if (!tok.ok) throw new Error(data.error || 'session failed');
+      // Create the AudioContext first, while we still have the click's user activation.
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this.ctx.resume().catch(() => {});
+      this.out = this.ctx.createGain();
+      this.sink = this.ctx.createMediaStreamDestination();
+      this.out.connect(this.sink);
+      const audio = $('#aiAudio'); audio.muted = false; audio.srcObject = this.sink.stream; audio.play().catch(() => {});
 
-      this.pc = new RTCPeerConnection();
-      const audio = $('#aiAudio');
-      this.pc.ontrack = (e) => { audio.srcObject = e.streams[0]; };
-      this.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-      this.mic.getTracks().forEach((t) => this.pc.addTrack(t, this.mic));
-      this.dc = this.pc.createDataChannel('oai-events');
-      this.dc.onmessage = (e) => this.onEvent(JSON.parse(e.data));
-      this.dc.onopen = () => this.send({ type: 'response.create' }); // AI opens the meeting
+      this.mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+      const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: 'application/javascript' }));
+      await this.ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      this.capture = new AudioWorkletNode(this.ctx, 'pcm-capture');
+      this.capture.port.onmessage = (e) => this.onMicFrame(e.data);
+      const silent = this.ctx.createGain(); silent.gain.value = 0;
+      this.ctx.createMediaStreamSource(this.mic).connect(this.capture);
+      this.capture.connect(silent).connect(this.ctx.destination); // keeps the worklet pulled
 
-      const offer = await this.pc.createOffer();
-      await this.pc.setLocalDescription(offer);
-      const sdp = await fetch('https://api.openai.com/v1/realtime/calls', {
-        method: 'POST', body: offer.sdp, headers: { Authorization: `Bearer ${data.clientSecret}`, 'Content-Type': 'application/sdp' },
+      this.h.onStatus('(connecting to Cartesia…)');
+      await new Promise((resolve, reject) => {
+        const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/cartesia`);
+        this.ws = ws;
+        const timer = setTimeout(() => reject(new Error('Timed out connecting to Cartesia.')), 20000);
+        ws.onopen = () => ws.send(JSON.stringify({ type: 'start', config: this.config }));
+        ws.onmessage = (e) => {
+          let ev; try { ev = JSON.parse(e.data); } catch { return; }
+          if (!this.ready && ev.type === 'session_ready') { this.ready = true; clearTimeout(timer); resolve(); }
+          if (!this.ready && (ev.type === 'proxy_error' || (ev.type === 'error' && ev.fatal))) { clearTimeout(timer); reject(new Error(ev.message || 'Cartesia error')); return; }
+          this.onEvent(ev);
+        };
+        ws.onclose = (e) => {
+          clearTimeout(timer);
+          if (!this.ready) reject(new Error(`Cartesia connection closed (${e.code}${e.reason ? `: ${e.reason}` : ''}).`));
+          else if (!this.stopped) { this.h.onError('Cartesia session ended. Click “End & get report” to see your report.'); this.h.onStatus('(disconnected)'); }
+        };
+        ws.onerror = () => {};
       });
-      if (!sdp.ok) throw new Error(`WebRTC negotiation failed (${sdp.status})`);
-      await this.pc.setRemoteDescription({ type: 'answer', sdp: await sdp.text() });
       this.h.onStatus('');
     }
-    send(ev) { if (this.dc?.readyState === 'open') this.dc.send(JSON.stringify(ev)); }
+    onMicFrame(buf) {
+      if (!this.ready || this.ws?.readyState !== 1) return;
+      // Muted/paused mic tracks deliver silence; we still send it (continuous_input keeps the session alive).
+      this.ws.send(JSON.stringify({ type: 'audio_input', audio: b64FromBytes(new Uint8Array(buf)) }));
+    }
     onEvent(ev) {
       switch (ev.type) {
-        case 'input_audio_buffer.speech_started':
-          this.userSpeaking = true; this.h.onUserSpeaking(true);
-          this.h.onMessage({ id: ev.item_id, role: 'user' });
-          this.armInterrupt();
-          break;
-        case 'input_audio_buffer.speech_stopped':
-          this.userSpeaking = false; this.h.onUserSpeaking(false); this.disarmInterrupt();
-          this.stopAt = performance.now();
-          break;
-        case 'conversation.item.input_audio_transcription.delta': {
-          const m = this.h.onMessage({ id: ev.item_id, role: 'user' });
-          this.h.onMessage({ id: ev.item_id, text: (m.text || '') + (ev.delta || '') });
-          this.h.onCaption('You', m.text);
+        case 'audio_output': this.play(ev.audio); break;
+        case 'audio_output_clear': this.flush(); break;
+        case 'turn_started': {
+          const id = `cx-${ev.role}-${ev.turn}`;
+          if (ev.role === 'user') { this.userSpeaking = true; this.h.onUserSpeaking(true); this.h.onMessage({ id, role: 'user' }); this.h.onCaption('You', '…'); }
+          else { this.aiText[ev.turn] = ''; }
           break;
         }
-        case 'conversation.item.input_audio_transcription.completed':
-          this.h.onMessage({ id: ev.item_id, role: 'user', text: (ev.transcript || '').trim() });
-          this.h.onUserTurnFinal((ev.transcript || '').trim());
-          break;
-        case 'output_audio_buffer.started':
-          this.aiSpeaking = true; this.h.onAiSpeaking(true); this.markLatency();
-          break;
-        case 'output_audio_buffer.stopped':
-        case 'output_audio_buffer.cleared':
-          this.aiSpeaking = false; this.h.onAiSpeaking(false);
-          break;
-        case 'response.output_audio_transcript.delta':
-        case 'response.audio_transcript.delta': {
-          this.markLatency();
-          const id = ev.item_id;
-          this.aiItems[id] = (this.aiItems[id] || '') + ev.delta;
-          this.h.onMessage({ id, role: 'assistant', text: this.aiItems[id], interrupted: this.pendingInterrupt });
-          this.h.onCaption(this.role.personaName, this.aiItems[id]);
+        case 'turn_output_text_delta': {
+          if (ev.role === 'user') break;
+          this.aiText[ev.turn] = (this.aiText[ev.turn] || '') + (ev.text || '');
+          this.h.onMessage({ id: `cx-assistant-${ev.turn}`, role: 'assistant', text: this.aiText[ev.turn] });
+          this.h.onCaption(this.role.personaName, this.aiText[ev.turn]);
           break;
         }
-        case 'response.output_audio_transcript.done':
-        case 'response.audio_transcript.done':
-          this.h.onMessage({ id: ev.item_id, role: 'assistant', text: ev.transcript || this.aiItems[ev.item_id] });
-          this.pendingInterrupt = false;
+        case 'turn_ended': {
+          const id = `cx-${ev.role}-${ev.turn}`;
+          const text = (ev.text || '').trim();
+          if (ev.role === 'user') {
+            this.userSpeaking = false; this.h.onUserSpeaking(false);
+            this.h.onMessage({ id, role: 'user', text });
+            if (text) { this.h.onCaption('You', text); this.h.onUserTurnFinal(text); this.stopAt = performance.now(); }
+          } else {
+            this.h.onMessage({ id, role: 'assistant', text: text || this.aiText[ev.turn] || '' });
+          }
           break;
+        }
         case 'error':
-          this.h.onError(ev.error?.message || 'Realtime error');
+          this.h.onError(ev.message || 'Cartesia error');
+          break;
+        case 'proxy_error':
+          this.h.onError(ev.message);
           break;
       }
     }
-    markLatency() { if (this.stopAt) { this.h.onLatency(performance.now() - this.stopAt); this.stopAt = 0; } }
-    // AI interrupts the user if they talk past the pressure threshold.
-    armInterrupt() {
-      this.disarmInterrupt();
-      if (!this.interruptSec || this.paused) return;
-      this.intTimer = setTimeout(() => {
-        if (!this.userSpeaking || this.aiSpeaking) return;
-        this.pendingInterrupt = true;
-        this.send({ type: 'response.create', response: { instructions: 'The user has been talking for a long time. Interrupt them NOW, naturally and briefly (e.g., "Sorry to cut in —"), and ask for their bottom line or challenge the weakest part of what they just said. One sentence.' } });
-      }, this.interruptSec * 1000);
+    play(b64) {
+      if (this.paused) return;
+      const u8 = bytesFromB64(b64);
+      const pcm = new Int16Array(u8.buffer, 0, u8.length >> 1);
+      if (!pcm.length) return;
+      const buf = this.ctx.createBuffer(1, pcm.length, CARTESIA_RATE);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 0x8000;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf; src.connect(this.out);
+      const t = Math.max(this.ctx.currentTime + 0.04, this.playhead);
+      src.start(t);
+      this.playhead = t + buf.duration;
+      this.sources.add(src);
+      if (this.stopAt) { this.h.onLatency(performance.now() - this.stopAt); this.stopAt = 0; }
+      if (!this.aiSpeaking) { this.aiSpeaking = true; this.h.onAiSpeaking(true); }
+      src.onended = () => {
+        this.sources.delete(src);
+        if (!this.sources.size) { this.aiSpeaking = false; this.h.onAiSpeaking(false); }
+      };
     }
-    disarmInterrupt() { clearTimeout(this.intTimer); }
-    sendText(text) {
-      const id = 'typed-' + Date.now();
-      this.h.onMessage({ id, role: 'user', text });
-      this.h.onUserTurnFinal(text);
-      this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });
-      this.stopAt = performance.now();
-      this.send({ type: 'response.create' });
+    flush() {
+      this.sources.forEach((s) => { try { s.onended = null; s.stop(); } catch {} });
+      this.sources.clear(); this.playhead = 0;
+      if (this.aiSpeaking) { this.aiSpeaking = false; this.h.onAiSpeaking(false); }
     }
+    sendText() { this.h.onError('Typing isn’t supported with the Cartesia voice agent — just speak.'); }
     setMuted(m) { this.mic?.getAudioTracks().forEach((t) => { t.enabled = !m && !this.paused; }); }
     setPaused(p) {
       this.paused = p;
       this.mic?.getAudioTracks().forEach((t) => { t.enabled = !p && !state.muted; });
-      const audio = $('#aiAudio');
-      if (p) { this.send({ type: 'response.cancel' }); this.send({ type: 'output_audio_buffer.clear' }); audio.muted = true; this.disarmInterrupt(); }
-      else audio.muted = false;
+      if (p) this.flush();
+      if (this.out) this.out.gain.value = p ? 0 : 1;
     }
     stop() {
-      this.disarmInterrupt();
-      try { this.dc?.close(); } catch {}
-      try { this.pc?.close(); } catch {}
+      this.stopped = true;
+      try { this.ws?.close(1000, 'session ended'); } catch {}
+      this.flush();
       this.mic?.getTracks().forEach((t) => t.stop());
+      try { this.capture?.disconnect(); } catch {}
+      this.ctx?.close().catch(() => {});
       $('#aiAudio').srcObject = null;
       this.h.onAiSpeaking(false); this.h.onUserSpeaking(false);
     }
