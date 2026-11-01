@@ -238,24 +238,49 @@
     renderProjects();
     try { await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch {}
   }
+  // Suggest a name that isn't already taken: "Interviewer — 2026-11-02",
+  // then "Interviewer — 2026-11-02 2", " 3", …
+  function uniquifyName(base, taken = state.projects.map((p) => p.name)) {
+    if (!taken.includes(base)) return base;
+    let n = 2;
+    while (taken.includes(`${base} ${n}`)) n++;
+    return `${base} ${n}`;
+  }
   async function saveCurrentProject() {
     const role = currentRole(); if (!role) return;
-    const name = prompt(`Save as project (role ${role.label}, ${state.mode}, ${state.pressure}) name:`, `${role.label} — ${new Date().toISOString().slice(0, 10)}`);
+    const base = `${role.label} — ${new Date().toISOString().slice(0, 10)}`;
+    const name = prompt(`Save as project (role ${role.label}, ${state.mode}, ${state.pressure}) name:`, uniquifyName(base));
     if (!name) return;
     const trimmed = name.trim(); if (!trimmed) return;
     const payload = { name: trimmed.slice(0, 80), mode: state.mode, role: state.role, pressure: state.pressure, durationMin: state.durationMin, context: $('#context').value };
-    try {
-      const r = await fetch('/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const saved = await r.json();
-      state.projects = [saved, ...state.projects.filter((p) => p.name !== saved.name)];
-      state.activeProject = saved.id;
-    } catch {
-      // Server unreachable — keep it in localStorage on this browser at least.
-      const project = { id: 'p' + Date.now(), ...payload };
-      state.projects = [project, ...state.projects.filter((p) => p.name !== trimmed)];
-      state.activeProject = project.id;
-      showBanner('Could not save the project to the server — keeping a copy in this browser instead.');
+    // Same name as an existing project? Update it (keeps id + trials) or save as a new one.
+    const existing = state.projects.find((p) => p.name === payload.name);
+    if (existing && confirm(`A project named "${payload.name}" already exists.\n\nOK = update it (its trials are kept)\nCancel = save as a NEW project`)) {
+      try {
+        const r = await fetch(`/api/projects/${encodeURIComponent(existing.id)}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const saved = await r.json();
+        state.projects = state.projects.map((p) => (String(p.id) === String(saved.id) ? saved : p));
+        state.activeProject = saved.id;
+      } catch (e) {
+        showBanner(`Could not update the project: ${e.message}`);
+        return;
+      }
+    } else {
+      const finalName = existing ? uniquifyName(payload.name) : payload.name;
+      try {
+        const r = await fetch('/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...payload, name: finalName }) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const saved = await r.json();
+        state.projects = [saved, ...state.projects];
+        state.activeProject = saved.id;
+      } catch {
+        // Server unreachable — keep it in localStorage on this browser at least.
+        const project = { id: 'p' + Date.now(), name: finalName, ...payload };
+        state.projects = [project, ...state.projects];
+        state.activeProject = project.id;
+        showBanner('Could not save the project to the server — keeping a copy in this browser instead.');
+      }
     }
     saveLocalProjects(state.projects);
     renderProjects();

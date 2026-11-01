@@ -435,6 +435,13 @@ test('projects: JSON store roundtrip + API endpoints', async () => {
     assert.equal(list[0].name, 'Acme PM');
     const bad = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'X', role: 'nope' }) });
     assert.equal(bad.status, 400);
+    // PUT updates in place: same id/createdAt, new settings.
+    const upd = await (await fetch(`${base}/api/projects/${created.id}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Acme PM v2', role: 'interviewer', mode: 'practice', pressure: 'low', durationMin: 10, context: 'new JD' }) })).json();
+    assert.equal(upd.id, created.id, 'PUT keeps the id');
+    assert.equal(upd.name, 'Acme PM v2');
+    assert.equal(upd.createdAt, created.createdAt, 'PUT preserves createdAt');
+    assert.equal((await (await fetch(`${base}/api/projects`)).json()).length, 1, 'no duplicate row');
+    assert.equal((await fetch(`${base}/api/projects/nope`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Y', role: 'interviewer' }) })).status, 404);
     const del = await (await fetch(`${base}/api/projects/${created.id}`, { method: 'DELETE' })).json();
     assert.equal(del.deleted, true);
     assert.equal((await (await fetch(`${base}/api/projects`)).json()).length, 0);

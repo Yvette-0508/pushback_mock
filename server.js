@@ -64,6 +64,19 @@ function createApp(opts = {}) {
     const project = { id: 'p_' + Math.random().toString(36).slice(2, 10), ...ok.project, createdAt: now, updatedAt: now };
     try { await app.locals.projects.upsert(project); res.json(project); } catch (e) { res.status(500).json({ error: e.message }); }
   });
+  app.put('/api/projects/:id', async (req, res) => {
+    const id = String(req.params.id).slice(0, 40);
+    try {
+      const existing = await app.locals.projects.get(id);
+      if (!existing) return res.status(404).json({ error: 'Not found.' });
+      const { ROLES } = require('./lib/roles');
+      const ok = sanitizeProject(req.body, Object.keys(ROLES));
+      if (ok.error) return res.status(400).json({ error: ok.error });
+      const project = { ...existing, ...ok.project, id, updatedAt: new Date().toISOString() };
+      await app.locals.projects.upsert(project);
+      res.json(project);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
   app.delete('/api/projects/:id', async (req, res) => {
     try {
       const deleted = await app.locals.projects.remove(String(req.params.id).slice(0, 40));
