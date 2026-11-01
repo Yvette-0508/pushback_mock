@@ -22,6 +22,7 @@
       </div>
       <nav class="nav-list">
         <button class="nav-item active" data-go="setup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 3h6M10 3v6.5L4.8 18.2A1.8 1.8 0 0 0 6.3 21h11.4a1.8 1.8 0 0 0 1.5-2.8L14 9.5V3"/><path d="M7.5 15h9"/></svg>Playground</button>
+        <button class="nav-item" data-go="projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Projects</button>
         <button class="nav-item" data-go="room" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>Meeting room</button>
         <button class="nav-item" data-go="report" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 3 5-6"/></svg>Report</button>
         <a class="nav-item" href="https://github.com/Yvette-0508/pushback_mock" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 6.5C10 5 7 4.5 3.5 5v13c3.5-.5 6.5 0 8.5 1.5 2-1.5 5-2 8.5-1.5V5C17 4.5 14 5 12 6.5zM12 6.5v13"/></svg>Documentation<svg class="ext" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 4h6v6M20 4l-8 8M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
@@ -80,6 +81,10 @@
               <div class="sec-head">Pressure<span class="flex"></span><div id="pressureSeg" class="seg"></div></div>
               <p id="pressureDesc" class="sec-note"></p>
             </div>
+            <div class="sec">
+              <div class="sec-head">Time limit<span class="flex"></span><div id="durationSeg" class="seg"></div></div>
+              <p id="durationDesc" class="sec-note"></p>
+            </div>
           </div>
 
           <div class="pg-foot">
@@ -91,6 +96,49 @@
         </div>
 
         <aside id="preview" class="preview"></aside>
+      </section>
+
+      <!-- ============ PROJECTS ============ -->
+      <section id="projects" class="screen">
+        <div class="pj">
+          <div class="pj-list">
+            <div class="pj-head">
+              <span class="hd-title">Projects</span>
+              <span class="flex"></span>
+              <button id="newProjectBtn" class="ghost-btn">+ New</button>
+            </div>
+            <div id="projectList" class="pj-items"></div>
+          </div>
+          <div class="pj-detail" id="projectDetail">
+            <div class="pj-empty" id="projectEmpty">
+              <p class="muted">Select a project on the left, or create one from the Playground (Save current).</p>
+            </div>
+            <div id="projectBody" class="hidden">
+              <div class="pj-detail-head">
+                <div>
+                  <div id="pdTitle" class="hd-title"></div>
+                  <div id="pdMeta" class="muted small"></div>
+                </div>
+                <span class="flex"></span>
+                <button id="pdStartBtn" class="run-btn">Open in Playground</button>
+                <button id="pdDeleteBtn" class="ghost-btn danger">Delete</button>
+              </div>
+
+              <div class="sec">
+                <div class="sec-head mono-tag">persona</div>
+                <div id="pdPersona" class="pj-sec-body"></div>
+              </div>
+              <div class="sec">
+                <div class="sec-head mono-tag">context · JD</div>
+                <div id="pdContext" class="pj-sec-body pre"></div>
+              </div>
+              <div class="sec">
+                <div class="sec-head mono-tag">trials</div>
+                <div id="pdTrials" class="pj-sec-body"></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- ============ ROOM ============ -->
@@ -105,6 +153,11 @@
           <div class="row gap">
             <span id="latency" class="muted small mono"></span>
             <span id="timer" class="mono timer">00:00</span>
+          </div>
+          <div id="timesUp" class="timesup hidden">
+            <span>Time's up.</span>
+            <button id="timesUpEndBtn" class="run-btn">End &amp; get report</button>
+            <button id="timesUpKeepBtn" class="ghost-btn">Keep talking</button>
           </div>
         </div>
 

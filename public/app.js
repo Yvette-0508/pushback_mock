@@ -14,7 +14,8 @@
   const saveLocalProjects = (list) => { try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(list)); } catch {} };
   const state = {
     cfg: null, mode: 'practice', role: 'interviewer', pressure: 'medium', layout: localStorage.getItem('pushback.layout') || 'zoom',
-    projects: [], activeProject: null,
+    projects: [], activeProject: null, selectedProject: null,
+    durationMin: 0, countingDown: false,
     transcript: [], engine: null, startedAt: 0, timerId: null, muted: false, paused: false, report: null, latencies: [],
   };
 
@@ -31,7 +32,7 @@
     }
     $('#engineStat').textContent = vp === 'cartesia' ? 'Cartesia' : 'Demo voice';
     $('#modelPill').textContent = vp === 'cartesia' ? `cartesia · ${state.cfg.cartesiaModel}` : 'demo-voice';
-    renderModes(); renderRoles(); renderPressure(); applyLayout();
+    renderModes(); renderRoles(); renderPressure(); renderDuration(); applyLayout();
     refreshProjects();
     const ctx = $('#context');
     ctx.addEventListener('input', updateEditor);
@@ -41,10 +42,24 @@
     $('#joinBtn').addEventListener('click', joinMeeting);
     $('#againBtn').addEventListener('click', () => { state.report = null; $('[data-go="report"]').disabled = true; show('setup'); });
     $('#saveProjectBtn').addEventListener('click', saveCurrentProject);
+    $('#newProjectBtn').addEventListener('click', () => show('setup'));
+    $('#pdStartBtn').addEventListener('click', () => {
+      const p = state.projects.find((x) => String(x.id) === String(state.selectedProject));
+      if (!p) return;
+      applyProject(p);
+      show('setup');
+    });
+    $('#pdDeleteBtn').addEventListener('click', async () => {
+      const p = state.projects.find((x) => String(x.id) === String(state.selectedProject));
+      if (!p || !confirm(`Delete project "${p.name}"? All of its trials will be deleted too.`)) return;
+      await deleteProject(p.id);
+      state.selectedProject = null;
+      renderProjectsScreen();
+    });
     $('#downloadBtn').addEventListener('click', downloadReport);
     $('#clearBtn').addEventListener('click', () => {
-      state.mode = 'practice'; state.role = 'interviewer'; state.pressure = 'medium';
-      ctx.value = ''; updateEditor(); renderModes(); renderRoles(); renderPressure();
+      state.mode = 'practice'; state.role = 'interviewer'; state.pressure = 'medium'; state.durationMin = 0;
+      ctx.value = ''; updateEditor(); renderModes(); renderRoles(); renderPressure(); renderDuration();
     });
     $('#announceClose').addEventListener('click', () => { $('#announce').classList.add('hidden'); document.body.classList.remove('has-strip'); });
     $('#navCollapse').addEventListener('click', () => document.body.classList.toggle('nav-collapsed'));
@@ -91,6 +106,16 @@
     $('#context').placeholder = role.contextPlaceholder;
     renderPreview();
   }
+  const DURATIONS = [[0, 'No limit'], [3, '3 min'], [5, '5 min'], [10, '10 min'], [15, '15 min']];
+  function renderDuration() {
+    if (state.activeProject) { state.activeProject = null; renderProjects(); }
+    $('#durationSeg').innerHTML = DURATIONS.map(([m, label]) => `<button data-d="${m}" class="${m === state.durationMin ? 'on' : ''}">${label}</button>`).join('');
+    $$('#durationSeg button').forEach((b) => b.addEventListener('click', () => { state.durationMin = Number(b.dataset.d); renderDuration(); }));
+    $('#durationDesc').textContent = state.durationMin
+      ? `Countdown runs in the room. At 0:00 you can end to the report or keep talking.`
+      : 'No countdown — the timer just counts up.';
+    renderPreview();
+  }
   function renderPressure() {
     if (state.activeProject) { state.activeProject = null; renderProjects(); }
     $('#pressureSeg').innerHTML = state.cfg.pressure.map((p) => `<button data-p="${p.id}" class="${p.id === state.pressure ? 'on' : ''}" title="${esc(p.desc)}">${esc(p.label)}</button>`).join('');
@@ -101,10 +126,100 @@
   }
 
   function applyProject(p) {
-    state.activeProject = p.id;
     state.mode = p.mode; state.role = p.role; state.pressure = p.pressure;
+    state.durationMin = Number.isFinite(+p.durationMin) ? +p.durationMin : 0;
     $('#context').value = p.context || ''; updateEditor();
-    renderModes(); renderRoles(); renderPressure(); renderProjects();
+    renderModes(); renderRoles(); renderPressure(); renderDuration();
+    // Set last: the render calls above clear activeProject (they treat any change as "edited").
+    state.activeProject = p.id;
+    renderProjects();
+  }
+
+  // ---------------- Projects screen (long-lived projects, many trials each) ----------------
+  const fmtDur = (s) => (s == null ? '—' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+  const scoreClass = (n) => (n == null ? '' : n >= 75 ? 'good' : n >= 55 ? 'mid' : 'low');
+  function renderProjectsScreen() {
+    const list = $('#projectList');
+    if (!state.projects.length) {
+      list.innerHTML = '<p class="muted small" style="padding:8px 12px">No projects yet. Set up a role + JD in the Playground and hit “Save current”.</p>';
+    } else {
+      list.innerHTML = state.projects.map((p) => {
+        const role = state.cfg.roles.find((r) => r.id === p.role);
+        return `<button class="pj-item ${String(p.id) === String(state.selectedProject) ? 'on' : ''}" data-pid="${esc(p.id)}">
+          <div class="pj-name">${esc(p.name)}</div>
+          <div class="pj-sub">${esc(role ? role.label : p.role)} · ${esc(p.mode)} · ${esc(p.pressure)}${p.durationMin ? ` · ${p.durationMin}m` : ''}</div>
+        </button>`;
+      }).join('');
+      list.querySelectorAll('[data-pid]').forEach((b) => b.addEventListener('click', () => { state.selectedProject = b.dataset.pid; renderProjectsScreen(); }));
+    }
+    const p = state.projects.find((x) => String(x.id) === String(state.selectedProject));
+    $('#projectEmpty').classList.toggle('hidden', !!p);
+    $('#projectBody').classList.toggle('hidden', !p);
+    if (!p) return;
+    const role = state.cfg.roles.find((r) => r.id === p.role);
+    $('#pdTitle').textContent = p.name;
+    $('#pdMeta').textContent = `Created ${p.createdAt ? new Date(p.createdAt).toLocaleDateString() : '—'}`;
+    $('#pdPersona').innerHTML = `
+      <div class="kv"><b>Role</b><span>${esc(role ? `${role.label} — ${role.personaName}, ${role.title}` : p.role)}</span></div>
+      <div class="kv"><b>Mode</b><span>${esc(p.mode)}</span></div>
+      <div class="kv"><b>Pressure</b><span>${esc(p.pressure)}</span></div>
+      <div class="kv"><b>Time limit</b><span>${p.durationMin ? `${p.durationMin} min` : 'No limit'}</span></div>`;
+    $('#pdContext').textContent = p.context || '(no context)';
+    loadTrials(p.id);
+  }
+  async function loadTrials(projectId) {
+    const box = $('#pdTrials');
+    box.innerHTML = '<p class="muted small">Loading trials…</p>';
+    let trials = [];
+    try { const r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/reports`); trials = r.ok ? await r.json() : []; } catch {}
+    if (String(state.selectedProject) !== String(projectId)) return; // user switched meanwhile
+    if (!trials.length) { box.innerHTML = '<p class="muted small">No trials yet. Open in Playground → Join meeting; the report is saved here automatically.</p>'; return; }
+    // Oldest = trial #1; list newest first.
+    const n = trials.length;
+    const scores = trials.map((t) => t.overall).filter((x) => x != null);
+    const best = scores.length ? Math.max(...scores) : null;
+    const first = trials[n - 1]?.overall, last = trials[0]?.overall;
+    const trend = first != null && last != null && n > 1 ? last - first : null;
+    box.innerHTML = `<p class="muted small" style="margin:0 0 10px">${n} trial${n > 1 ? 's' : ''}${best != null ? ` · best ${best}` : ''}${trend != null ? ` · ${trend >= 0 ? '+' : ''}${trend} since trial #1` : ''}</p>` +
+      trials.map((t, i) => `<div class="trial-row">
+        <span class="t-num">#${n - i}</span>
+        <span class="t-date">${esc(new Date(t.createdAt).toLocaleString())}</span>
+        <span class="t-score ${scoreClass(t.overall)}">${t.overall ?? '—'}</span>
+        <span class="t-dur">${fmtDur(t.durationSec)}</span>
+        <span class="t-best"></span>
+        <button class="ghost-btn" data-open-report="${esc(t.id)}">Open report</button>
+        <button class="ghost-btn danger" data-del-report="${esc(t.id)}" title="Delete trial">×</button>
+      </div>`).join('');
+    box.querySelectorAll('[data-open-report]').forEach((b) => b.addEventListener('click', () => openSavedReport(b.dataset.openReport)));
+    box.querySelectorAll('[data-del-report]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('Delete this trial?')) return;
+      await fetch(`/api/reports/${encodeURIComponent(b.dataset.delReport)}`, { method: 'DELETE' }).catch(() => {});
+      loadTrials(projectId);
+    }));
+  }
+  async function openSavedReport(id) {
+    try {
+      const r = await fetch(`/api/reports/${encodeURIComponent(id)}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const row = await r.json();
+      state.report = { ...row.report, savedAs: { projectName: row.projectName, id: row.id } };
+      show('report');
+      renderReport(state.report);
+    } catch (e) { showBanner(`Could not open report: ${e.message}`); }
+  }
+  // Save a finished session's report as a trial of the project it was run under.
+  async function saveTrial(report) {
+    const pid = state.sessionProject;
+    if (!pid) return null;
+    const p = state.projects.find((x) => String(x.id) === String(pid));
+    try {
+      const r = await fetch('/api/reports', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ projectId: pid, projectName: p?.name, overall: report.overall, durationSec: report.durationSec, config: report.config, report }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+      return { ...(await r.json()), projectName: p?.name };
+    } catch (e) { showBanner(`Report not saved to project: ${e.message}`); return null; }
   }
   async function refreshProjects() {
     try {
@@ -128,7 +243,7 @@
     const name = prompt(`Save as project (role ${role.label}, ${state.mode}, ${state.pressure}) name:`, `${role.label} — ${new Date().toISOString().slice(0, 10)}`);
     if (!name) return;
     const trimmed = name.trim(); if (!trimmed) return;
-    const payload = { name: trimmed.slice(0, 80), mode: state.mode, role: state.role, pressure: state.pressure, context: $('#context').value };
+    const payload = { name: trimmed.slice(0, 80), mode: state.mode, role: state.role, pressure: state.pressure, durationMin: state.durationMin, context: $('#context').value };
     try {
       const r = await fetch('/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -199,6 +314,7 @@
   const sessionConfig = () => ({ role: state.role, mode: state.mode, pressure: state.pressure, context: $('#context').value });
   const interruptAfterSec = () => (state.cfg.pressure.find((p) => p.id === state.pressure) || {}).interruptAfterSec || 0;
   function show(id) {
+    if (id === 'projects') renderProjectsScreen();
     $$('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
     $$('.nav-item[data-go]').forEach((n) => n.classList.toggle('active', n.dataset.go === id));
     $('[data-go="room"]').disabled = id !== 'room';
@@ -214,6 +330,8 @@
     $('#betterBtn').addEventListener('click', betterPhrasing);
     $('#chatBtn').addEventListener('click', () => $('#sidebar').classList.toggle('collapsed'));
     $('#leaveBtn').addEventListener('click', endSession);
+    $('#timesUpEndBtn').addEventListener('click', endSession);
+    $('#timesUpKeepBtn').addEventListener('click', () => { $('#timesUp').classList.add('hidden'); $('#timer').classList.remove('crit'); });
     $$('.tab').forEach((t) => t.addEventListener('click', () => selectTab(t.dataset.tab)));
     $('#typeForm').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -234,6 +352,10 @@
 
   async function joinMeeting() {
     const role = currentRole();
+    // The trial belongs to whichever project is loaded right now (null = ad-hoc, not saved).
+    state.sessionProject = state.activeProject;
+    $('#timer').textContent = state.durationMin > 0 ? `${String(state.durationMin).padStart(2, '0')}:00` : '00:00';
+    $('#timer').classList.remove('warn', 'crit'); $('#timesUp').classList.add('hidden');
     state.transcript = []; state.latencies = []; state.muted = false; state.paused = false;
     document.body.classList.toggle('formal', state.mode === 'formal');
     $('#roomTitle').textContent = `${role.label} meeting`;
@@ -270,6 +392,7 @@
       }
       // The Cartesia agent is voice-only (no text input event).
       $('#typeForm').classList.toggle('hidden', state.engine instanceof CartesiaEngine);
+      startTimer(); // countdown starts at join, not when the opener finishes speaking
       await state.engine.start();
     } catch (err) {
       // Keep the reason visible: the fallback persona's opener overwrites the caption.
@@ -285,11 +408,40 @@
       }
     } finally { joinBtn.disabled = false; }
 
+    startTimer();
+  }
+
+  // Countdown (or count-up) for the meeting clock. Called as soon as the meeting
+  // joins — not gated on the persona's opener finishing.
+  function startTimer() {
     state.startedAt = Date.now();
+    state.countingDown = state.durationMin > 0;
+    const durationSec = state.durationMin * 60;
     clearInterval(state.timerId);
+    const timerEl = $('#timer');
+    timerEl.classList.remove('warn', 'crit');
+    $('#timesUp').classList.add('hidden');
+    const fmt = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    timerEl.textContent = fmt(state.countingDown ? durationSec : 0); // paint immediately, before the first tick
     state.timerId = setInterval(() => {
-      const s = Math.floor((Date.now() - state.startedAt) / 1000);
-      $('#timer').textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+      const elapsed = Math.floor((Date.now() - state.startedAt) / 1000);
+      const t = $('#timer');
+      if (state.countingDown) {
+        const remain = durationSec - elapsed;
+        t.textContent = fmt(Math.max(0, remain));
+        // Amber for the last quarter of the meeting; red wins for the last minute (CSS order).
+        t.classList.toggle('warn', remain <= durationSec * 0.25);
+        t.classList.toggle('crit', remain <= 60);
+        if (remain <= 0) {
+          state.countingDown = false;
+          t.classList.add('crit');
+          $('#timesUp').classList.remove('hidden');
+          if ('vibrate' in navigator) navigator.vibrate?.(200);
+        }
+      } else {
+        t.textContent = fmt(elapsed);
+        t.classList.remove('warn', 'crit');
+      }
     }, 500);
   }
 
@@ -355,6 +507,7 @@
     try { state.engine?.stop(); } catch {}
     state.engine = null;
     $('#pausedOverlay').classList.add('hidden');
+    $('#timesUp').classList.add('hidden');
     show('report');
     $('#reportBody').innerHTML = '<div class="loading"><div class="spinner"></div><p>Analyzing your session…</p></div>';
     const transcript = state.transcript.filter((m) => m.text && m.text.trim()).map(({ role, text, t, interrupted }) => ({ role, text, t, interrupted }));
@@ -363,6 +516,8 @@
       const report = await res.json();
       if (!res.ok) throw new Error(report.error || res.statusText);
       state.report = { ...report, transcript, config: sessionConfig(), durationSec: Math.round((Date.now() - state.startedAt) / 1000), latencies: state.latencies };
+      const saved = await saveTrial(state.report);
+      if (saved) state.report.savedAs = saved;
       renderReport(state.report);
       $('#sessionStat').textContent = `Last score ${state.report.overall}`;
     } catch (e) {
@@ -378,9 +533,10 @@
   function renderReport(r) {
     const role = state.cfg.roles.find((x) => x.id === r.config.role);
     const pct = (arr, p) => { if (!arr.length) return null; const s = [...arr].sort((a, b) => a - b); return Math.round(s[Math.min(s.length - 1, Math.floor(p * s.length))]); };
-    const p50 = pct(r.latencies, 0.5), p95 = pct(r.latencies, 0.95);
+    const p50 = pct(r.latencies || [], 0.5), p95 = pct(r.latencies || [], 0.95);
     $('#reportBody').innerHTML = `
       ${r.warning ? `<div class="banner">${esc(r.warning)}</div>` : ''}
+      ${r.savedAs ? `<p class="muted small">Saved as a trial of <b>${esc(r.savedAs.projectName || 'project')}</b> — see all trials under Projects.</p>` : '<p class="muted small">Ad-hoc session (no project loaded) — not saved. Load a project before joining to track trials.</p>'}
       <p class="muted">${esc(role.label)} · ${r.config.mode === 'formal' ? 'Formal' : 'Practice'} mode · ${Math.floor(r.durationSec / 60)}m ${r.durationSec % 60}s
         · ${r.source === 'llm' ? `evaluated by ${esc(r.model)}` : 'heuristic evaluation'}${p50 !== null ? ` · latency p50 ${p50} ms / p95 ${p95} ms` : ''}</p>
 

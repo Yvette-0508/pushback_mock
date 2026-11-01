@@ -68,9 +68,21 @@ Linear is **not connected to runtime content**. The Cartesia agent, the roles an
 
 If you want runtime connection, you'd have to add it: a small Intake endpoint that fetches a Linear doc/issue and writes it into `text` on `context`, or a `ROLES_FILE` exporter. Happy to add it — tell me which.
 
-## Projects (saved setups)
+## Projects (saved setups, tracked over time)
 
-The **Project** row at the top of the Playground saves named setups — role + mode + pressure + context (your JD) — so each project maps to one role+JD combo. "Save current" stores the current form; clicking a chip loads it; × deletes it.
+Each **project** is one persistent practice target: a role + mode + pressure + time limit + context (your JD). Create one from the Playground ("Save current"), and it appears under **Projects** in the left navigation.
+
+The Projects screen lists every project; selecting one shows:
+
+- **persona** — role, persona name, mode, pressure, time limit
+- **context · JD** — the JD/scenario text the persona and report use
+- **trials** — every meeting run under that project, numbered `#1, #2, …`, each with its **independently graded** score, date, and duration, plus best-so-far and trend since trial #1. Open any past trial's full report, or delete it.
+
+Reports save to the project automatically when a session ends (if a project was loaded). This is the long-term record: keep a project for weeks, run a trial whenever you want, and watch the scores move.
+
+### Time limit
+
+Pick a meeting length in the Playground (No limit / 3 / 5 / 10 / 15 min, saved per project). The room header counts **down**, turns amber for the last quarter and red for the final minute, and at 0:00 shows "Time's up" with **End & get report** (go straight to the report) or **Keep talking** (timer switches to count-up). Note: the persona can't be forced to say a wrap-up line at 0:00 — the Cartesia agent API has no "speak now" trigger.
 
 Storage backends:
 

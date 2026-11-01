@@ -147,6 +147,11 @@ body.nav-collapsed .nav-item { justify-content: center; }
 .tag { font-family: var(--mono); font-size: 12px; padding: 2px 7px; background: var(--pink); border: 1px solid var(--pink2); color: var(--pinkText); }
 .tag.ghost { background: var(--soft); border-color: var(--line2); color: var(--text2); }
 .timer { font-size: 14px; color: var(--text2); }
+.timer.warn { color: #b8860b; }
+.timer.crit { color: var(--bad); font-weight: 600; }
+.timesup { position: absolute; top: 52px; right: 16px; z-index: 30; display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--bad); border-radius: 8px; padding: 8px 12px; font-size: 13px; box-shadow: 0 4px 16px rgba(150, 0, 0, 0.18); }
+.timesup .run-btn { padding: 5px 10px; font-size: 12px; }
+#room { position: relative; }
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); animation: blink 1.6s infinite; }
 @keyframes blink { 50% { opacity: .3; } }
 .room-body { flex: 1; display: flex; min-height: 0; }
@@ -251,6 +256,8 @@ ul.ins { margin: 0; padding-left: 20px; } ul.ins li { margin-bottom: 6px; line-h
 body.meet #room { background: #202124; }
 body.meet .room-top { border: 0; background: #202124; color: #e8eaed; }
 body.meet .room-top .hd-title, body.meet .timer { color: #e8eaed; }
+body.meet .timer.warn { color: #f0c34e; }
+body.meet .timer.crit { color: #ff7b72; }
 body.meet .rec-dot { display: none; }
 body.meet .tile { background: #3c4043; border-radius: 10px; }
 body.meet .tile.speaking { border-color: #8ab4f8; }
@@ -265,3 +272,32 @@ body.meet .tool span:last-child { display: none; } body.meet .tool .ico { font-s
 body.meet .tool.off { background: #ea4335; color: #fff; }
 body.meet .tool.leave { width: 64px; background: #ea4335; margin-left: 12px; }
 body.meet .tool:hover { filter: brightness(1.15); }
+
+/* ===== Projects screen ===== */
+.pj { display: grid; grid-template-columns: 300px 1fr; height: 100%; }
+.pj-list { border-right: 1px solid var(--line); overflow-y: auto; }
+.pj-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.pj-items { padding: 8px; }
+.pj-item { display: block; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+.pj-item:hover { background: var(--soft); }
+.pj-item.on { background: var(--soft); border-color: var(--line2); }
+.pj-item .pj-name { font-weight: 600; font-size: 14px; }
+.pj-item .pj-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
+.pj-detail { overflow-y: auto; padding: 16px 20px; }
+.pj-empty { display: flex; align-items: center; justify-content: center; height: 60%; }
+.pj-detail-head { display: flex; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.pj-detail-head .gd-name { font-size: 20px; font-weight: 700; }
+.pj-sec-body { padding: 12px 16px; font-size: 14px; color: var(--text2); }
+.pj-sec-body.pre { white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: var(--text3); }
+.pj-sec-body .kv { display: flex; gap: 8px; padding: 2px 0; }
+.pj-sec-body .kv b { color: var(--muted); font-weight: 500; min-width: 110px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; font-size: 11px; padding-top: 2px; }
+.mono-tag { font-family: var(--mono); font-weight: 400; }
+.trial-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; background: var(--surface); }
+.trial-row .t-num { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 46px; }
+.trial-row .t-date { font-size: 12px; color: var(--muted); width: 150px; }
+.trial-row .t-score { font-weight: 700; font-size: 15px; width: 44px; text-align: center; }
+.trial-row .t-score.good { color: var(--good); } .trial-row .t-score.mid { color: #b8860b; } .trial-row .t-score.low { color: var(--bad); }
+.trial-row .t-dur { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.trial-row .t-best { font-size: 12px; color: var(--text3); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trial-row button { flex-shrink: 0; }
+.ghost-btn.danger:hover { color: var(--bad); border-color: var(--bad); }

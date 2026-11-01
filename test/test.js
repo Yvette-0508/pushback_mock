@@ -1,4 +1,7 @@
 // Offline test suite: no API keys, no network. Run with: npm test
+// Never touch the real database from tests: dotenv won't override a key that's
+// already set, so blanking it here keeps .env's DATABASE_URL out of createApp().
+process.env.DATABASE_URL = '';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ROLES, PRESSURE, validateConfig, buildInstructions, getRole, publicRoles, sanitizeContext } = require('../lib/roles');
@@ -397,8 +400,11 @@ const { createStore, sanitizeProject } = require('../lib/projects');
 test('projects: sanitize validates name/role and defaults mode/pressure', () => {
   assert.ok(sanitizeProject({}, ['interviewer']).error, 'name required');
   assert.ok(sanitizeProject({ name: 'X', role: 'nope' }, ['interviewer']).error, 'bad role rejected');
-  const ok = sanitizeProject({ name: ' My JD ', role: 'interviewer', mode: 'weird', pressure: 'extreme', context: 'c\u0000x' }, ['interviewer']);
+  const ok = sanitizeProject({ name: ' My JD ', role: 'interviewer', mode: 'weird', pressure: 'extreme', context: 'c\u0000x', durationMin: 5 }, ['interviewer']);
   assert.equal(ok.project.name, 'My JD');
+  assert.equal(ok.project.durationMin, 5);
+  assert.equal(sanitizeProject({ name: 'Y', role: 'interviewer', durationMin: 999 }, ['interviewer']).project.durationMin, 60, 'clamped at 60');
+  assert.equal(sanitizeProject({ name: 'Y', role: 'interviewer', durationMin: 'nope' }, ['interviewer']).project.durationMin, 0, 'invalid → 0 (no limit)');
   assert.equal(ok.project.mode, 'practice');
   assert.equal(ok.project.pressure, 'medium');
   assert.equal(ok.project.context, 'cx', 'null bytes stripped');
@@ -440,11 +446,52 @@ test('projects: postgres store issues the right SQL (mock pool)', async () => {
   const pool = { query: async (sql, params) => { queries.push({ sql: sql.replace(/\s+/g, ' ').trim(), params }); return { rows: [], rowCount: 1 }; } };
   const store = createStore({ env: { DATABASE_URL: 'postgresql://ignored' }, pool });
   assert.equal(store.kind, 'postgres');
+  const find = (re) => queries.find((q) => re.test(q.sql));
   await store.init();
-  assert.match(queries[0].sql, /CREATE TABLE IF NOT EXISTS pushback_projects/);
-  await store.upsert({ id: 'p1', name: 'A', role: 'boss', mode: 'formal', pressure: 'high', context: 'c' });
-  assert.match(queries[1].sql, /ON CONFLICT \(id\) DO UPDATE/);
-  assert.deepEqual(queries[1].params, ['p1', 'A', 'boss', 'formal', 'high', 'c']);
+  assert.ok(find(/CREATE TABLE IF NOT EXISTS pushback_projects/));
+  assert.ok(find(/ADD COLUMN IF NOT EXISTS duration_min/));
+  assert.ok(find(/CREATE TABLE IF NOT EXISTS pushback_reports/), 'reports table');
+  assert.ok(find(/CREATE INDEX IF NOT EXISTS pushback_reports_project_idx/));
+  await store.upsert({ id: 'p1', name: 'A', role: 'boss', mode: 'formal', pressure: 'high', context: 'c', durationMin: 5 });
+  assert.deepEqual(find(/ON CONFLICT \(id\) DO UPDATE/).params, ['p1', 'A', 'boss', 'formal', 'high', 'c', 5]);
+  await store.addReport({ id: 'r1', projectId: 'p1', projectName: 'A', name: null, overall: 72, report: { overall: 72 }, config: { role: 'boss' }, durationSec: 300 });
+  const ins = find(/INSERT INTO pushback_reports/);
+  assert.equal(ins.params[1], 'p1'); assert.equal(ins.params[4], 72); assert.equal(ins.params[5], '{"overall":72}');
+  await store.listReports('p1');
+  assert.deepEqual(find(/FROM pushback_reports WHERE project_id = \$1/).params, ['p1']);
+  queries.length = 0;
   await store.remove('p1');
-  assert.match(queries[2].sql, /DELETE FROM pushback_projects/);
+  assert.ok(find(/DELETE FROM pushback_projects/));
+  assert.deepEqual(find(/DELETE FROM pushback_reports WHERE project_id/).params, ['p1'], 'trials cascade on project delete');
+});
+
+test('projects: trials are graded per project (JSON store + API)', async () => {
+  const stamp = Date.now();
+  const app = createApp({ env: { OPENAI_API_KEY: '', LLM_API_KEY: '', CARTESIA_API_KEY: '' } });
+  app.locals.projects = createStore({ env: {}, file: path.join(os.tmpdir(), `pb-p-${stamp}.json`), reportsFile: path.join(os.tmpdir(), `pb-r-${stamp}.json`) });
+  const srv = await new Promise((res) => { const x = app.listen(0, () => res(x)); });
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const post = async (u, b) => fetch(base + u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  try {
+    const a = await (await post('/api/projects', { name: 'Acme PM', role: 'interviewer' })).json();
+    const b = await (await post('/api/projects', { name: 'Seed pitch', role: 'investor' })).json();
+    // Two trials on A, one on B.
+    for (const [pid, score] of [[a.id, 60], [a.id, 74], [b.id, 81]]) {
+      const r = await post('/api/reports', { projectId: pid, projectName: 'x', overall: score, durationSec: 200, config: { role: 'interviewer' }, report: { overall: score, scores: [] } });
+      assert.equal(r.status, 200);
+    }
+    const ta = await (await fetch(`${base}/api/projects/${a.id}/reports`)).json();
+    const tb = await (await fetch(`${base}/api/projects/${b.id}/reports`)).json();
+    assert.equal(ta.length, 2); assert.equal(tb.length, 1);
+    assert.deepEqual(ta.map((t) => t.overall).sort(), [60, 74]);
+    assert.equal(ta[0].report, undefined, 'list returns summaries, not full report blobs');
+    const full = await (await fetch(`${base}/api/reports/${tb[0].id}`)).json();
+    assert.equal(full.report.overall, 81);
+    // Unknown project rejected.
+    assert.equal((await post('/api/reports', { projectId: 'nope', report: { overall: 1 } })).status, 400);
+    // Deleting a project cascades its trials only.
+    await fetch(`${base}/api/projects/${a.id}`, { method: 'DELETE' });
+    assert.equal((await (await fetch(`${base}/api/projects/${a.id}/reports`)).json()).length, 0);
+    assert.equal((await (await fetch(`${base}/api/projects/${b.id}/reports`)).json()).length, 1);
+  } finally { srv.close(); }
 });

@@ -11,7 +11,7 @@ const { WebSocketServer } = require('ws');
 const { MODES, PRESSURE, validateConfig, buildInstructions, getRole, publicRoles } = require('./lib/roles');
 const { evaluateSession, rephrase } = require('./lib/evaluator');
 const { createCartesia } = require('./lib/cartesia');
-const { createStore, sanitizeProject } = require('./lib/projects');
+const { createStore, sanitizeProject, sanitizeReport } = require('./lib/projects');
 
 // cartesia | demo. VOICE_PROVIDER=demo forces the browser-speech demo voice.
 function pickVoiceProvider(env) {
@@ -67,6 +67,33 @@ function createApp(opts = {}) {
   app.delete('/api/projects/:id', async (req, res) => {
     try {
       const deleted = await app.locals.projects.remove(String(req.params.id).slice(0, 40));
+      res.json({ ok: true, deleted });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Reports are graded per project: a saved trial (one meeting's evaluation).
+  app.get('/api/projects/:id/reports', async (req, res) => {
+    try { res.json(await app.locals.projects.listReports(String(req.params.id).slice(0, 40))); } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.post('/api/reports', async (req, res) => {
+    const projects = await app.locals.projects.list().catch(() => []);
+    const ok = sanitizeReport(req.body, projects.map((p) => p.id));
+    if (ok.error) return res.status(400).json({ error: ok.error });
+    const row = ok.reportRow;
+    const now = new Date().toISOString();
+    const saved = { id: 'r_' + Math.random().toString(36).slice(2, 10), ...row, createdAt: now };
+    try { await app.locals.projects.addReport(saved); res.json({ id: saved.id, createdAt: saved.createdAt }); } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.get('/api/reports/:id', async (req, res) => {
+    try {
+      const r = await app.locals.projects.getReport(String(req.params.id).slice(0, 40));
+      if (!r) return res.status(404).json({ error: 'Not found.' });
+      res.json(r);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+  app.delete('/api/reports/:id', async (req, res) => {
+    try {
+      const deleted = await app.locals.projects.removeReport(String(req.params.id).slice(0, 40));
       res.json({ ok: true, deleted });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
