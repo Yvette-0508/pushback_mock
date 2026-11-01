@@ -49,7 +49,12 @@ function createApp(opts = {}) {
   app.use(express.json({ limit: '1mb' }));
   app.locals.projects = projects;
   projects.init().catch((e) => console.error('projects init failed:', e.message));
-  app.use(express.static(path.join(__dirname, 'public')));
+  // Always revalidate static assets: without this Chrome heuristic-caches app.js
+  // for a while, so a redeployed server can leave clients on stale UI code.
+  app.use(express.static(path.join(__dirname, 'public'), {
+    etag: true,
+    setHeaders(res) { res.setHeader('Cache-Control', 'no-cache'); },
+  }));
   app.get('/lib/analyzer.js', (req, res) => res.sendFile(path.join(__dirname, 'lib', 'analyzer.js')));
 
   // Projects (a named saved setup: role+mode+pressure+context).
